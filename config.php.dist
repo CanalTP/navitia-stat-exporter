@@ -1,0 +1,14 @@
+<?php
+
+$config = [
+    'database' => [
+        'host'     => 'localhost',
+        'port'     => 5432,
+        'user'     => 'stat_compiled',
+        'password' => 'stat_compiled',
+        'name'     => 'statistics',
+    ],
+    'file' => [
+        'root_dir' => __DIR__ . '/exports',
+    ]
+];

@@ -1,0 +1,16 @@
+{
+  "name": "canaltp/navitia-stat-exporter",
+  "type": "project",
+  "require": {
+    "php": ">=5.4"
+  },
+  "authors": [
+    {
+      "name": "Vincent Lepot",
+      "email": "vincent.lepot@canaltp.fr"
+    }
+  ],
+  "autoload": {
+    "psr-4": { "CanalTP\\NavitiaStatExporter\\": "./" }
+  }
+}
