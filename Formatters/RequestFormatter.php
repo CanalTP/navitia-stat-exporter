@@ -19,6 +19,7 @@ class RequestFormatter
             'response_size' => 'response_size',
             'end_point_id' => 'end_point_id',
             'end_point_name' => 'end_point_name',
+            'token' => 'token',
         ];
         foreach($fields as $dbField => $targetField) {
             if(!is_null($data[$dbField])) {
