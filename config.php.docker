@@ -1,0 +1,16 @@
+<?php
+
+$config = [
+    'database' => [
+//        'host'     => 'statdev.docker',
+        'host'     => 'mut-prd-bdd5.canaltp.prod',
+        'port'     => 5432,
+        'user'     => 'stat_compiled',
+//        'password' => 'stat_compiled',
+        'password' => 'moh4Ahpu',
+        'name'     => 'statistics',
+    ],
+    'file' => [
+        'root_dir' => '/exports',
+    ]
+];
