@@ -5,7 +5,8 @@ require 'vendor/autoload.php';
 
 use CanalTP\NavitiaStatExporter\Formatters;
 
-define('REQUESTS_PER_BLOCK', 500);
+define('REQUESTS_PER_BLOCK', 1000);
+define('LOG_ACTIVE', true);
 
 $dateArg = $_SERVER['argv'][1];
 
@@ -18,9 +19,13 @@ $dbConn = new \PDO($pdoDsn, $config['database']['user'], $config['database']['pa
 
 $dbConn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $dbConn->setAttribute(PDO::ATTR_CURSOR, PDO::CURSOR_FWDONLY);
-$dbConn->setAttribute(PDO::ATTR_PREFETCH, 1000);
+$dbConn->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
 
-$requestQuery = "SELECT * FROM stat.requests where request_date >= :start_date and request_date < ( :end_date :: date) + INTERVAL '1 day' order by id";
+$dbConn->exec('set enable_seqscan to false');
+
+$dbConn->beginTransaction(); // needed for cursor
+log("Cursor declaration");
+$requestQuery = "DECLARE c_requests CURSOR FOR SELECT * FROM stat.requests where request_date >= :start_date and request_date < ( :end_date :: date) + INTERVAL '1 day' order by id";
 
 $requestStmt = $dbConn->prepare($requestQuery);
 $requestStmt->bindValue('start_date', $startDate->format('Y-m-d'));
@@ -36,6 +41,11 @@ $interpretedParameterFormatter = new Formatters\InterpretedParameterFormatter;
 $journeyRequestFormatter = new Formatters\JourneyRequestFormatter;
 $journeyFormatter = new Formatters\JourneyFormatter;
 
+function log($message) {
+    if (LOG_ACTIVE) print strftime("%Y-%m-%d %H:%M:%S") . " - $message" . PHP_EOL;
+}
+
+log("Opening file");
 $filename = $config['file']['root_dir'] . '/' . $startDate->format('Y/m/d') . '/' . 'stat_log_' . $startDate->format('Ymd') . '.json.log';
 
 if (! is_dir(dirname($filename))) {
@@ -51,29 +61,53 @@ if (!$fh) {
     exit(1);
 }
 
-function fetchRequestsBlock($requestStmt, $nbItems)
+function fetchRequestsBlock($nbItems)
 {
-    $requestsBlock = array();
-    while ($requestArray = $requestStmt->fetch(PDO::FETCH_ASSOC)) {
-        $requestsBlock[] = $requestArray;
-        if (count($requestsBlock) >= $nbItems) {
-            break;
-        }
-    }
+    global $dbConn;
+
+    log("Fetch $nbItems requests");
+
+    $requestQuery = 'FETCH ' . $nbItems . ' FROM c_requests';
+    $requestStmt = $dbConn->query($requestQuery);
+    $requestsBlock = $requestStmt->fetchAll(PDO::FETCH_ASSOC);
     return $requestsBlock;
 }
 
-while (count($requestsBlock = fetchRequestsBlock($requestStmt, REQUESTS_PER_BLOCK)) > 0) {
+while (count($requestsBlock = fetchRequestsBlock(REQUESTS_PER_BLOCK)) > 0) {
     $requestIds = array_column($requestsBlock, 'id');
+
+    log("Retrieve coverages");
     $coveragesPerRequest = getCoveragesForRequests($requestIds);
+
+    log("Retrieve errors");
     $errorsPerRequest = getErrorsForRequests($requestIds);
+
+    log("Retrieve parameters");
     $parametersPerRequest = getParametersForRequests($requestIds);
+
+    log("Retrieve interpreted parameters");
     $interpretedParametersPerRequest = getInterpretedParametersForRequests($requestIds);
+
+    log("Retrieve journeys");
     $journeysPerRequest = getJourneysForRequests($requestIds);
+
+    log("Retrieve journey requests");
     $journeyRequestsPerRequest = getJourneyRequestsForRequests($requestIds);
+
+    log("Retrieve info response");
     $infoResponsesPerRequest = getInfoResponseForRequests($requestIds);
+
+    log("Retrieve journey sections");
     $journeySectionsPerRequest = getJourneySectionsForRequests($requestIds);
 
+    log("Retrieve filter");
+    $interpretedParametersIds = [];
+    foreach ($interpretedParametersPerRequest as $reqId => $interpretedParameters) {
+        $interpretedParametersIds += array_map(function($elem) { return $elem['id']; }, $interpretedParameters);
+    }
+    $filtersPerInterpretedParams = getFiltersForInterpretedParameters($interpretedParametersIds);
+
+    log("Write request block to file");
     foreach($requestsBlock as $requestArray) {
         $request = $requestFormatter->format($requestArray);
         $request['coverages'] = $coverageFormatter->format($coveragesPerRequest[$requestArray['id']]);
@@ -95,8 +129,7 @@ while (count($requestsBlock = fetchRequestsBlock($requestStmt, REQUESTS_PER_BLOC
 
         if (array_key_exists($requestArray['id'], $interpretedParametersPerRequest)) {
             $interpretedParameters = $interpretedParametersPerRequest[$requestArray['id']];
-            $filters = getFiltersForRequest($requestArray['id']);
-            $request['interpreted_parameters'] = $interpretedParameterFormatter->format($interpretedParameters, $filters);
+            $request['interpreted_parameters'] = $interpretedParameterFormatter->format($interpretedParameters, $filtersPerInterpretedParams);
         }
 
         if (array_key_exists($requestArray['id'], $journeyRequestsPerRequest)) {
@@ -116,6 +149,11 @@ while (count($requestsBlock = fetchRequestsBlock($requestStmt, REQUESTS_PER_BLOC
 }
 
 fclose($fh);
+
+$dbConn->exec('CLOSE c_requests');
+
+$dbConn->rollBack(); // to close transaction
+
 
 function getCoveragesForRequests(array $requestIds)
 {
@@ -233,19 +271,27 @@ function getInfoResponseForRequests(array $requestIds)
     return $result;
 }
 
-function getFiltersForRequest($requestId)
+function getFiltersForRequest(array $requestIds)
 {
     global $dbConn;
 
-    static $stmt = null;
+    $query = "SELECT * from stat.filter where interpreted_parameter_id in (select id from stat.interpreted_parameters where request_id in (" . implode(',', $requestIds) . ") )";
+    $stmt = $dbConn->query($query);
 
-    if (is_null($stmt)) {
-        $query = "SELECT f.* from stat.filter f join stat.interpreted_parameters i on f.interpreted_parameter_id = i.id where i.request_id = :request_id";
-        $stmt = $dbConn->prepare($query);
+    $result = [];
+    while(($row = $stmt->fetch(PDO::FETCH_ASSOC))) {
+        $result[$row['interpreted_parameter_id']][] = $row;
     }
 
-    $stmt->bindValue('request_id', $requestId);
-    $stmt->execute();
+    return $result;
+}
+
+function getFiltersForInterpretedParameters(array $interpretedParametersIds)
+{
+    global $dbConn;
+
+    $query = "SELECT * from stat.filter where interpreted_parameter_id in (" . implode(',', $interpretedParametersIds) . ")";
+    $stmt = $dbConn->query($query);
 
     $result = [];
     while(($row = $stmt->fetch(PDO::FETCH_ASSOC))) {
