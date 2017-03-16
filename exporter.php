@@ -5,8 +5,12 @@ require 'vendor/autoload.php';
 
 use CanalTP\NavitiaStatExporter\Formatters;
 
+function log_msg($message) {
+    if (LOG_ACTIVE) print strftime("%Y-%m-%d %H:%M:%S") . " - $message" . PHP_EOL;
+}
+
 define('REQUESTS_PER_BLOCK', 1000);
-define('LOG_ACTIVE', true);
+define('LOG_ACTIVE', ($_ENV["LOG_ACTIVE"] == 1));
 
 $dateArg = $_SERVER['argv'][1];
 
@@ -24,7 +28,7 @@ $dbConn->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
 $dbConn->exec('set enable_seqscan to false');
 
 $dbConn->beginTransaction(); // needed for cursor
-log("Cursor declaration");
+log_msg("Cursor declaration");
 $requestQuery = "DECLARE c_requests CURSOR FOR SELECT * FROM stat.requests where request_date >= :start_date and request_date < ( :end_date :: date) + INTERVAL '1 day' order by id";
 
 $requestStmt = $dbConn->prepare($requestQuery);
@@ -41,11 +45,7 @@ $interpretedParameterFormatter = new Formatters\InterpretedParameterFormatter;
 $journeyRequestFormatter = new Formatters\JourneyRequestFormatter;
 $journeyFormatter = new Formatters\JourneyFormatter;
 
-function log($message) {
-    if (LOG_ACTIVE) print strftime("%Y-%m-%d %H:%M:%S") . " - $message" . PHP_EOL;
-}
-
-log("Opening file");
+log_msg("Opening file");
 $filename = $config['file']['root_dir'] . '/' . $startDate->format('Y/m/d') . '/' . 'stat_log_' . $startDate->format('Ymd') . '.json.log';
 
 if (! is_dir(dirname($filename))) {
@@ -65,7 +65,7 @@ function fetchRequestsBlock($nbItems)
 {
     global $dbConn;
 
-    log("Fetch $nbItems requests");
+    log_msg("Fetch $nbItems requests");
 
     $requestQuery = 'FETCH ' . $nbItems . ' FROM c_requests';
     $requestStmt = $dbConn->query($requestQuery);
@@ -76,38 +76,38 @@ function fetchRequestsBlock($nbItems)
 while (count($requestsBlock = fetchRequestsBlock(REQUESTS_PER_BLOCK)) > 0) {
     $requestIds = array_column($requestsBlock, 'id');
 
-    log("Retrieve coverages");
+    log_msg("Retrieve coverages");
     $coveragesPerRequest = getCoveragesForRequests($requestIds);
 
-    log("Retrieve errors");
+    log_msg("Retrieve errors");
     $errorsPerRequest = getErrorsForRequests($requestIds);
 
-    log("Retrieve parameters");
+    log_msg("Retrieve parameters");
     $parametersPerRequest = getParametersForRequests($requestIds);
 
-    log("Retrieve interpreted parameters");
+    log_msg("Retrieve interpreted parameters");
     $interpretedParametersPerRequest = getInterpretedParametersForRequests($requestIds);
 
-    log("Retrieve journeys");
+    log_msg("Retrieve journeys");
     $journeysPerRequest = getJourneysForRequests($requestIds);
 
-    log("Retrieve journey requests");
+    log_msg("Retrieve journey requests");
     $journeyRequestsPerRequest = getJourneyRequestsForRequests($requestIds);
 
-    log("Retrieve info response");
+    log_msg("Retrieve info response");
     $infoResponsesPerRequest = getInfoResponseForRequests($requestIds);
 
-    log("Retrieve journey sections");
+    log_msg("Retrieve journey sections");
     $journeySectionsPerRequest = getJourneySectionsForRequests($requestIds);
 
-    log("Retrieve filter");
+    log_msg("Retrieve filter");
     $interpretedParametersIds = [];
     foreach ($interpretedParametersPerRequest as $reqId => $interpretedParameters) {
         $interpretedParametersIds += array_map(function($elem) { return $elem['id']; }, $interpretedParameters);
     }
     $filtersPerInterpretedParams = getFiltersForInterpretedParameters($interpretedParametersIds);
 
-    log("Write request block to file");
+    log_msg("Write request block to file");
     foreach($requestsBlock as $requestArray) {
         $request = $requestFormatter->format($requestArray);
         $request['coverages'] = $coverageFormatter->format($coveragesPerRequest[$requestArray['id']]);
